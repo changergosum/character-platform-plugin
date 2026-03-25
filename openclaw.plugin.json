@@ -1,0 +1,39 @@
+{
+  "id": "sideclaw",
+  "kind": "channel",
+  "channels": ["sideclaw"],
+  "version": "0.1.0",
+  "description": "Connect OpenClaw to SideClaw for real-time AI voice conversations with embodied agents.",
+  "name": "SideClaw",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "sideclaw": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean", "default": false },
+          "sideClawUrl": {
+            "type": "string",
+            "description": "WebSocket URL of the sideclaw server, e.g. ws://sideclaw-host:19999"
+          },
+          "pairingToken": {
+            "type": "string",
+            "description": "Pairing token from SideClaw onboarding UI"
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "sideClawUrl": {
+      "label": "SideClaw URL",
+      "placeholder": "ws://sideclaw-host:19999"
+    },
+    "pairingToken": {
+      "label": "Pairing Token",
+      "placeholder": "Token from SideClaw onboarding",
+      "sensitive": true
+    }
+  }
+}

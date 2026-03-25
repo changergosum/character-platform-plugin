@@ -1,0 +1,17 @@
+.git/
+.github/
+.remember/
+node_modules/
+*.test.ts
+*.spec.ts
+tsconfig.json
+.gitignore
+.npmignore
+.env*
+.DS_Store
+*.tgz
+coverage/
+docs/
+TODO.md
+AGENTS.md
+CLAUDE.md
