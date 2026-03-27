@@ -7,10 +7,6 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "paths": {
-      "openclaw/plugin-sdk": ["../openclaw/src/plugin-sdk/index.ts"],
-      "openclaw/plugin-sdk/*": ["../openclaw/src/plugin-sdk/*.ts"]
-    }
   },
   "include": ["src/**/*.ts"]
 }

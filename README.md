@@ -60,6 +60,14 @@ openclaw config set channels.sideclaw.pairingToken "sk_pair_YOUR_TOKEN_HERE"
 |----------|-------------|
 | `OPENCLAW_GATEWAY_TOKEN` | Gateway authentication token. Takes priority over any value stored in config. |
 
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `/sideclaw-pair` | Show step-by-step pairing instructions (register on SideClaw, add OpenClaw, get pairing token) |
+| `/sideclaw-status` | Show current connection state and configured values (`sideClawUrl`, `pairingToken` presence, `enabled`) |
+| `/sideclaw-reconnect` | Skip the pending retry delay and reconnect immediately (no-op if already connected) |
+
 ## How It Works
 
 OpenClaw gateways typically run on a user's local machine behind NAT, so SideClaw cannot reach the gateway directly. This plugin uses a reverse connection pattern: it dials out from the gateway to SideClaw rather than waiting to be dialed. On startup, the plugin connects to the local gateway WebSocket first and buffers the `connect.challenge` message before opening a second connection to SideClaw. The buffered challenge is forwarded to SideClaw immediately after the connection opens, which prevents the gateway from timing out while waiting for a handshake response. Once both sides complete the handshake, the plugin becomes a bidirectional frame relay for the lifetime of the session. If either side disconnects, the gateway's ChannelManager restarts `startAccount()` with backoff.

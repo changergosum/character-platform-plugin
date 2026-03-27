@@ -30,6 +30,72 @@ const ALLOWED_WS_SCHEMES = new Set(["ws:", "wss:"]);
 /** Loopback addresses where plaintext ws:// is acceptable. */
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
+/** Delay between automatic reconnect attempts. */
+const RETRY_DELAY_MS = 60_000;
+
+/**
+ * Callback that skips the current retry delay and reconnects immediately.
+ * Non-null only while a retry wait is in progress.
+ */
+let pendingReconnect: (() => void) | null = null;
+
+export type ConnectionStatus =
+  | { state: "disconnected" }
+  | { state: "connecting" }
+  | { state: "connected" }
+  | { state: "retrying"; retryingAt: number; lastError: string };
+
+let connectionStatus: ConnectionStatus = { state: "disconnected" };
+
+export function getConnectionStatus(): ConnectionStatus {
+  return connectionStatus;
+}
+
+/**
+ * Skip the pending retry delay and reconnect immediately.
+ * Returns true if a retry was in progress.
+ */
+export function triggerReconnect(): boolean {
+  if (!pendingReconnect) return false;
+  pendingReconnect();
+  return true;
+}
+
+/** Extract a human-readable detail string from a WebSocket error event. */
+function formatWsError(ev: Event): string {
+  // Node 22 WebSocket fires an ErrorEvent-shaped object but ErrorEvent is not a
+  // global in Node, so use duck typing rather than instanceof.
+  const parts: string[] = [];
+  const msg = (ev as { message?: unknown }).message;
+  if (typeof msg === "string" && msg) parts.push(msg);
+  const err = (ev as { error?: unknown }).error;
+  if (err) parts.push(String(err));
+  return parts.length ? parts.join(" — ") : `type=${ev.type}`;
+}
+
+/**
+ * Wait up to `delayMs` before resolving, but resolve early if:
+ *   - `signal` is aborted (silently exits retry loop), or
+ *   - the account's reconnect trigger is invoked.
+ */
+function waitForRetry(delayMs: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      pendingReconnect = null;
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    const timer = setTimeout(done, delayMs);
+    const onAbort = () => done();
+    pendingReconnect = done;
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 /**
  * Validate and parse a WebSocket URL.
  * Rejects non-ws(s) schemes to prevent SSRF against HTTP/internal services.
@@ -91,7 +157,7 @@ function connectWithAbort(url: string, signal: AbortSignal): Promise<WebSocket> 
 
     ws.addEventListener("error", (ev) => {
       signal.removeEventListener("abort", onAbort);
-      reject(new Error(`WebSocket connect error: ${ev}`));
+      reject(new Error(`WebSocket connect error: ${formatWsError(ev)}`));
     }, { once: true });
   });
 }
@@ -230,9 +296,9 @@ function relayFrames(
 }
 
 /**
- * Long-lived task: buffer challenge, dial sideclaw, relay handshake, then relay frames.
+ * One connection attempt: buffer challenge, dial sideclaw, relay handshake, then relay frames.
  */
-export async function startAccount(ctx: ChannelGatewayContext<SideClawAccount>): Promise<void> {
+async function runSession(ctx: ChannelGatewayContext<SideClawAccount>): Promise<void> {
   const { sideClawUrl } = ctx.account;
   const gatewayToken = resolveGatewayToken(ctx.cfg);
   const pairingToken = ctx.account.pairingToken;
@@ -250,6 +316,8 @@ export async function startAccount(ctx: ChannelGatewayContext<SideClawAccount>):
 
   // Warn if sending token over plaintext to a remote host
   checkPlaintextToken(sideClawParsed, ctx.log);
+
+  connectionStatus = { state: "connecting" };
 
   // 1. Connect to gateway FIRST — it sends connect.challenge immediately
   const gatewayWs = await connectWithAbort(gatewayUrl, ctx.abortSignal);
@@ -284,10 +352,37 @@ export async function startAccount(ctx: ChannelGatewayContext<SideClawAccount>):
   const helloRaw = await waitForMessage(gatewayWs, ctx.abortSignal);
   sideClawWs.send(helloRaw);
 
+  connectionStatus = { state: "connected" };
   ctx.setStatus({ accountId: ctx.accountId, connected: true });
   ctx.log?.info("sideclaw: handshake complete, ready");
 
   // 7. Switch to generic bidirectional frame relay
   //    All GatewaySession RPC calls flow through from here.
   await relayFrames(sideClawWs, gatewayWs, ctx.abortSignal, ctx.cfg, ctx.log);
+}
+
+/**
+ * Long-lived task: run `runSession` in a retry loop.
+ * On failure, logs the full error and waits RETRY_DELAY_MS before
+ * reconnecting. The wait can be skipped early via `triggerReconnect`.
+ */
+export async function startAccount(ctx: ChannelGatewayContext<SideClawAccount>): Promise<void> {
+  try {
+    while (!ctx.abortSignal.aborted) {
+      try {
+        await runSession(ctx);
+      } catch (err) {
+        if (ctx.abortSignal.aborted) return;
+        const msg = err instanceof Error ? `${err.message}${err.cause ? ` (cause: ${err.cause})` : ""}` : String(err);
+        ctx.log?.error(`sideclaw: connection failed — ${msg}${err instanceof Error && err.stack ? `\n${err.stack}` : ""}`);
+        ctx.setStatus({ accountId: ctx.accountId, connected: false, lastError: msg });
+        const retryingAt = Date.now() + RETRY_DELAY_MS;
+        connectionStatus = { state: "retrying", retryingAt, lastError: msg };
+        ctx.log?.info(`sideclaw: retrying in ${RETRY_DELAY_MS / 1000}s (or use /sideclaw-reconnect to retry now)`);
+        await waitForRetry(RETRY_DELAY_MS, ctx.abortSignal);
+      }
+    }
+  } finally {
+    connectionStatus = { state: "disconnected" };
+  }
 }
