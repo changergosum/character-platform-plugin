@@ -21,8 +21,8 @@
 import type { ChannelGatewayContext, OpenClawConfig, PluginLogger } from "openclaw/plugin-sdk";
 import { resolveGatewayToken, resolveGatewayUrl } from "./config.js";
 import type { SideClawAccount } from "./config.js";
-import { handleWorkspaceRead } from "./workspace.js";
-import type { RpcRequest, RpcResponse, WorkspaceReadParams } from "./types.js";
+import { handleWorkspaceLs, handleWorkspaceRead, handleWorkspaceWrite } from "./workspace.js";
+import type { RpcRequest, RpcResponse, WorkspaceLsParams, WorkspaceReadParams, WorkspaceWriteParams } from "./types.js";
 
 /** Schemes permitted for the sideclaw WebSocket URL. */
 const ALLOWED_WS_SCHEMES = new Set(["ws:", "wss:"]);
@@ -209,18 +209,52 @@ function waitForMessage(
   });
 }
 
+/** Context passed to every plugin RPC handler. */
+type PluginRpcContext = {
+  agentsList: Array<{ id: string; workspace?: string }>;
+  defaultWorkspace: string | undefined;
+  logger?: PluginLogger;
+};
+
+/** A handler for a plugin-intercepted RPC method. Returns a ready-to-send RpcResponse. */
+type PluginRpcHandler = (frame: RpcRequest, ctx: PluginRpcContext) => Promise<RpcResponse>;
+
+function makeHandler<P>(
+  fn: (
+    agents: Array<{ id: string; workspace?: string }>,
+    params: P,
+    logger?: PluginLogger,
+    defaultWorkspace?: string,
+  ) => Promise<{ ok: true; payload: unknown } | { ok: false; error: string }>,
+): PluginRpcHandler {
+  return async (frame, ctx) => {
+    const result = await fn(ctx.agentsList, frame.params as P, ctx.logger, ctx.defaultWorkspace);
+    return result.ok
+      ? { type: "res", id: frame.id, ok: true, payload: result.payload }
+      : { type: "res", id: frame.id, ok: false, error: { message: result.error } };
+  };
+}
+
+/**
+ * Plugin-intercepted RPC methods.
+ * Add entries here to handle new methods locally without forwarding to the gateway.
+ */
+const PLUGIN_HANDLERS: Record<string, PluginRpcHandler> = {
+  "workspace.read": makeHandler<WorkspaceReadParams>(handleWorkspaceRead),
+  "workspace.write": makeHandler<WorkspaceWriteParams>(handleWorkspaceWrite),
+  "workspace.ls": makeHandler<WorkspaceLsParams>(handleWorkspaceLs),
+};
+
 /**
  * Relay frames bidirectionally between two WebSockets.
  *
  * Messages from `a` (sideclaw/bot-runner) heading to `b` (gateway) are
- * checked for `workspace.read` RPC requests. Matching requests are handled
- * locally using workspace info from the gateway config; everything else is
- * forwarded verbatim.
+ * logged and checked against PLUGIN_HANDLERS. Matching methods are handled
+ * locally; everything else is forwarded verbatim.
  *
- * @param cfg - Full gateway config (same object the original read-workspace plugin
- *              accesses as `ctx.config`). Contains `agents.defaults.workspace` and
+ * @param cfg - Full gateway config. Contains `agents.defaults.workspace` and
  *              optionally `agents.list` for agent-specific overrides.
- * @param logger - Optional logger for workspace read operations
+ * @param logger - Optional logger for request logging and handler operations.
  */
 function relayFrames(
   a: WebSocket,
@@ -229,9 +263,11 @@ function relayFrames(
   cfg: OpenClawConfig,
   logger?: PluginLogger,
 ): Promise<void> {
-  // Extract workspace info from config — same path as the read-workspace plugin
-  const agentsList = cfg.agents?.list ?? [];
-  const defaultWorkspace = cfg.agents?.defaults?.workspace?.trim() || undefined;
+  const pluginCtx: PluginRpcContext = {
+    agentsList: cfg.agents?.list ?? [],
+    defaultWorkspace: cfg.agents?.defaults?.workspace?.trim() || undefined,
+    logger,
+  };
 
   return new Promise<void>((resolve) => {
     let resolved = false;
@@ -251,17 +287,14 @@ function relayFrames(
     const aToB = (ev: MessageEvent) => {
       const raw = typeof ev.data === "string" ? ev.data : String(ev.data);
 
-      // Fast string check — only parse if the message might be a workspace.read request
-      if (raw.includes('"workspace.read"')) {
-        try {
-          const frame = JSON.parse(raw) as RpcRequest;
-          if (frame.type === "req" && frame.method === "workspace.read") {
-            // Handle locally using workspace info from gateway config
-            handleWorkspaceRead(agentsList, frame.params as WorkspaceReadParams, logger, defaultWorkspace)
-              .then((result) => {
-                const resp: RpcResponse = result.ok
-                  ? { type: "res", id: frame.id, ok: true, payload: result.payload }
-                  : { type: "res", id: frame.id, ok: false, error: { message: result.error } };
+      try {
+        const frame = JSON.parse(raw) as RpcRequest;
+        if (frame.type === "req") {
+          logger?.info(`sideclaw: rpc request id=${frame.id} method=${frame.method}`);
+          const handler = PLUGIN_HANDLERS[frame.method];
+          if (handler) {
+            handler(frame, pluginCtx)
+              .then((resp) => {
                 try { a.send(JSON.stringify(resp)); } catch { done(); }
               })
               .catch((err) => {
@@ -271,13 +304,10 @@ function relayFrames(
                 };
                 try { a.send(JSON.stringify(resp)); } catch { done(); }
               });
-            return; // Don't forward to gateway
+            return; // intercepted — don't forward to gateway
           }
-        } catch {
-          // JSON parse failed — fall through to normal relay
         }
-      }
-
+      } catch { /* not a parseable RPC — fall through */ }
       try { b.send(ev.data); } catch { done(); }
     };
 

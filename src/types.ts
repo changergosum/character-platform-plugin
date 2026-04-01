@@ -19,9 +19,26 @@ export type RpcResponse = {
 
 /** Parameters for workspace.read RPC. */
 export type WorkspaceReadParams = {
+  sessionKey?: string;
   path?: string;
   recursive?: boolean;
+};
+
+/** Parameters for workspace.write RPC. */
+export type WorkspaceWriteParams = {
   sessionKey?: string;
+  /** Workspace-relative path to write (required). */
+  path: string;
+  /** UTF-8 content to write (required). */
+  content: string;
+};
+
+/** Parameters for workspace.ls RPC. */
+export type WorkspaceLsParams = {
+  sessionKey?: string;
+  /** Workspace-relative path to list (defaults to root). */
+  path?: string;
+  recursive?: boolean;
 };
 
 /** Single file entry returned by workspace.read. */

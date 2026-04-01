@@ -4,7 +4,7 @@ import type { PluginLogger } from "openclaw/plugin-sdk";
 import path from "node:path";
 import fs from "node:fs/promises";
 import type { Dirent } from "node:fs";
-import type { WorkspaceReadParams, FileEntry } from "./types.js";
+import type { WorkspaceReadParams, WorkspaceWriteParams, WorkspaceLsParams, FileEntry } from "./types.js";
 
 const EXCLUDED_DIRECTORIES = new Set([
   ".git",
@@ -128,9 +128,7 @@ export function resolveWorkspace(
 
   // Try agent-specific workspace first
   const list = Array.isArray(agents) ? agents : [];
-  const agentEntry = list.find(
-    (a) => a.id.toLowerCase() === agentId,
-  );
+  const agentEntry = list.find((a) => a.id.toLowerCase() === agentId);
 
   const agentWorkspace = agentEntry?.workspace?.trim();
   const workspace = agentWorkspace || defaultWorkspace?.trim();
@@ -211,6 +209,109 @@ export async function handleWorkspaceRead(
     }
 
     return { ok: true, payload: entries };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: message };
+  }
+}
+
+/**
+ * Top-level handler for workspace.write RPC.
+ * Writes (or overwrites) a single file inside the agent's workspace.
+ * Parent directories are created if they don't exist.
+ * Returns {ok, payload: {bytes}} or {ok: false, error}.
+ */
+export async function handleWorkspaceWrite(
+  agents: Array<{ id: string; workspace?: string }>,
+  params: WorkspaceWriteParams,
+  logger?: PluginLogger,
+  defaultWorkspace?: string,
+): Promise<{ ok: true; payload: { bytes: number } } | { ok: false; error: string }> {
+  try {
+    if (!params.sessionKey) {
+      return { ok: false, error: "sessionKey is required for workspace.write" };
+    }
+    if (!params.path?.trim()) {
+      return { ok: false, error: "path is required for workspace.write" };
+    }
+    if (typeof params.content !== "string") {
+      return { ok: false, error: "content is required for workspace.write" };
+    }
+
+    const workspaceRoot = resolveWorkspace(agents, params.sessionKey, defaultWorkspace);
+    await ensureWorkspaceExists(workspaceRoot);
+
+    const targetPath = path.resolve(workspaceRoot, params.path.trim().replace(/\\/g, "/"));
+    if (!isSubPath(targetPath, workspaceRoot)) {
+      return { ok: false, error: `Path '${params.path}' is outside the workspace` };
+    }
+
+    logger?.info(
+      `workspace.write: path=${params.path} agent-session=${params.sessionKey}`,
+    );
+
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, params.content, "utf8");
+
+    return { ok: true, payload: { bytes: Buffer.byteLength(params.content, "utf8") } };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: message };
+  }
+}
+
+/**
+ * Top-level handler for workspace.ls RPC.
+ * Lists workspace-relative file paths without reading their content.
+ * Returns {ok, payload: string[]} or {ok: false, error}.
+ */
+export async function handleWorkspaceLs(
+  agents: Array<{ id: string; workspace?: string }>,
+  params: WorkspaceLsParams,
+  logger?: PluginLogger,
+  defaultWorkspace?: string,
+): Promise<{ ok: true; payload: string[] } | { ok: false; error: string }> {
+  try {
+    if (!params.sessionKey) {
+      return { ok: false, error: "sessionKey is required for workspace.ls" };
+    }
+
+    const workspaceRoot = resolveWorkspace(agents, params.sessionKey, defaultWorkspace);
+    await ensureWorkspaceExists(workspaceRoot);
+
+    const recursive = params.recursive !== false;
+    const requestedPath = params.path?.trim();
+
+    logger?.info(
+      `workspace.ls: path=${requestedPath ?? "."} recursive=${recursive} agent-session=${params.sessionKey}`,
+    );
+
+    let targetDir: string;
+    if (requestedPath) {
+      targetDir = path.resolve(workspaceRoot, requestedPath.replace(/\\/g, "/"));
+      if (!isSubPath(targetDir, workspaceRoot)) {
+        return { ok: false, error: `Path '${requestedPath}' is outside the workspace` };
+      }
+    } else {
+      targetDir = workspaceRoot;
+    }
+
+    let stats;
+    try {
+      stats = await fs.stat(targetDir);
+    } catch {
+      return { ok: true, payload: [] };
+    }
+    if (!stats.isDirectory()) {
+      return { ok: false, error: `Path '${requestedPath}' is not a directory` };
+    }
+
+    const filePaths = await collectFiles(targetDir, recursive);
+    const relativePaths = filePaths.map((p) =>
+      path.relative(workspaceRoot, p).split(path.sep).join("/"),
+    );
+
+    return { ok: true, payload: relativePaths };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { ok: false, error: message };
