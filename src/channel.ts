@@ -29,7 +29,7 @@ export const sideClawChannel: ChannelPlugin = {
   config: {
     listAccountIds(cfg: OpenClawConfig): string[] {
       const sideclaw = cfg?.channels?.sideclaw;
-      if (!sideclaw?.enabled || !sideclaw?.sideClawUrl) return [];
+      if (!sideclaw?.enabled) return [];
       return ["sideclaw"];
     },
 

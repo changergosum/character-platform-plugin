@@ -21,7 +21,7 @@ export function resolveAccount(cfg: OpenClawConfig, accountId?: string): SideCla
     console.warn(`sideclaw: unexpected accountId "${accountId}", only "sideclaw" is supported`);
   }
   const sideclaw = cfg.channels?.sideclaw ?? {};
-  const sideClawUrl = typeof sideclaw.sideClawUrl === "string" ? sideclaw.sideClawUrl.trim() : "";
+  const sideClawUrl = typeof sideclaw.sideClawUrl === "string" ? sideclaw.sideClawUrl.trim() : "ws://localhost:8000/openclaw/channel";
 
   return {
     accountId: "sideclaw",
