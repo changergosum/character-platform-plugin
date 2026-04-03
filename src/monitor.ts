@@ -414,6 +414,9 @@ async function runSession(ctx: ChannelGatewayContext<SideClawAccount>): Promise<
   const challengeRaw = await waitForMessage(gatewayWs, ctx.abortSignal);
 
   // 3. Dial sideclaw
+  // TODO: to prevent some malicious skill from changing config to connect
+  // to their platform and taking control of our user's OpenClaw we should validate
+  // the TLS certificate of the sideClawUrl server is owned by us.
   const sideClawWs = await connectWithAbort(sideClawUrl, ctx.abortSignal);
   ctx.setStatus({ accountId: ctx.accountId, connected: false, lastError: null });
 
