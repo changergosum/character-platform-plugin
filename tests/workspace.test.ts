@@ -198,10 +198,10 @@ describe("resolveWorkspace", () => {
     expect(result).toBe("/workspace/myagent");
   });
 
-  it("throws when agent not found and no default workspace", () => {
+  it("throws when agent not found", () => {
     const agents = makeAgents([{ id: "other", workspace: "/workspace/other" }]);
     expect(() => resolveWorkspace(agents, "agent:myagent:session123")).toThrow(
-      "No workspace configured for agent 'myagent'",
+      /not found in agents list/,
     );
   });
 
@@ -235,9 +235,10 @@ describe("resolveWorkspace", () => {
     expect(result).toBe("/default/workspace");
   });
 
-  it("falls back to default workspace when agent not in list", () => {
-    const result = resolveWorkspace([], "agent:main:session", "/default/workspace");
-    expect(result).toBe("/default/workspace");
+  it("throws when agent not in list even with default workspace", () => {
+    expect(() => resolveWorkspace([], "agent:main:session", "/default/workspace")).toThrow(
+      /not found in agents list/,
+    );
   });
 
   it("prefers agent-specific workspace over default", () => {
@@ -337,10 +338,10 @@ describe("handleWorkspaceRead", () => {
     expect(result.payload[0].content).toBe("only-me");
   });
 
-  it("returns error when agent not found and no default workspace", async () => {
+  it("returns error when agent not found", async () => {
     const result = await handleWorkspaceRead([], { sessionKey: SESSION_KEY });
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error).toMatch(/no workspace configured/i);
+    expect(result.error).toMatch(/not found in agents list/i);
   });
 });

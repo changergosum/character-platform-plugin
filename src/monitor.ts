@@ -211,8 +211,7 @@ function waitForMessage(
 
 /** Context passed to every plugin RPC handler. */
 type PluginRpcContext = {
-  agentsList: Array<{ id: string; workspace?: string }>;
-  defaultWorkspace: string | undefined;
+  cfg: OpenClawConfig;
   logger?: PluginLogger;
 };
 
@@ -228,7 +227,9 @@ function makeHandler<P>(
   ) => Promise<{ ok: true; payload: unknown } | { ok: false; error: string }>,
 ): PluginRpcHandler {
   return async (frame, ctx) => {
-    const result = await fn(ctx.agentsList, frame.params as P, ctx.logger, ctx.defaultWorkspace);
+    const agentsList = ctx.cfg.agents?.list ?? [];
+    const defaultWorkspace = ctx.cfg.agents?.defaults?.workspace?.trim() || undefined;
+    const result = await fn(agentsList, frame.params as P, ctx.logger, defaultWorkspace);
     return result.ok
       ? { type: "res", id: frame.id, ok: true, payload: result.payload }
       : { type: "res", id: frame.id, ok: false, error: { message: result.error } };
@@ -264,8 +265,7 @@ function relayFrames(
   logger?: PluginLogger,
 ): Promise<void> {
   const pluginCtx: PluginRpcContext = {
-    agentsList: cfg.agents?.list ?? [],
-    defaultWorkspace: cfg.agents?.defaults?.workspace?.trim() || undefined,
+    cfg,
     logger,
   };
 
@@ -312,6 +312,33 @@ function relayFrames(
     };
 
     const bToA = (ev: MessageEvent) => {
+      const raw = typeof ev.data === "string" ? ev.data : String(ev.data);
+
+      // Intercept plugin-handled RPCs from the gateway (e.g. workspace.write
+      // triggered by the backend's install endpoint). Responses go back to the
+      // gateway (b), not to sideclaw.
+      try {
+        const frame = JSON.parse(raw) as RpcRequest;
+        if (frame.type === "req") {
+          const handler = PLUGIN_HANDLERS[frame.method];
+          if (handler) {
+            logger?.info(`sideclaw: intercepted gateway rpc id=${frame.id} method=${frame.method}`);
+            handler(frame, pluginCtx)
+              .then((resp) => {
+                try { b.send(JSON.stringify(resp)); } catch { done(); }
+              })
+              .catch((err) => {
+                const resp: RpcResponse = {
+                  type: "res", id: frame.id, ok: false,
+                  error: { message: String(err) },
+                };
+                try { b.send(JSON.stringify(resp)); } catch { done(); }
+              });
+            return; // intercepted — don't forward to sideclaw
+          }
+        }
+      } catch { /* not a parseable RPC — fall through */ }
+
       try { a.send(ev.data); } catch { done(); }
     };
     const onClose = () => done();

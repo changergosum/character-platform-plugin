@@ -126,12 +126,17 @@ export function resolveWorkspace(
     throw new Error(`Cannot parse agent ID from sessionKey: ${key}`);
   }
 
-  // Try agent-specific workspace first
+  // Look up the agent — never fall back to default silently
   const list = Array.isArray(agents) ? agents : [];
   const agentEntry = list.find((a) => a.id.toLowerCase() === agentId);
 
-  const agentWorkspace = agentEntry?.workspace?.trim();
-  const workspace = agentWorkspace || defaultWorkspace?.trim();
+  if (!agentEntry) {
+    const knownIds = list.map((a) => a.id).join(", ");
+    throw new Error(`Agent '${agentId}' not found in agents list [${knownIds}]`);
+  }
+
+  // Use agent-specific workspace; fall back to default only for the default agent (no explicit workspace)
+  const workspace = agentEntry.workspace?.trim() || defaultWorkspace?.trim();
 
   if (!workspace) {
     throw new Error(`No workspace configured for agent '${agentId}'`);
