@@ -23,6 +23,8 @@ import { resolveGatewayToken, resolveGatewayUrl } from "./config.js";
 import type { SideClawAccount } from "./config.js";
 import { handleWorkspaceLs, handleWorkspaceRead, handleWorkspaceWrite } from "./workspace.js";
 import type { RpcRequest, RpcResponse, WorkspaceLsParams, WorkspaceReadParams, WorkspaceWriteParams } from "./types.js";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 /** Schemes permitted for the sideclaw WebSocket URL. */
 const ALLOWED_WS_SCHEMES = new Set(["ws:", "wss:"]);
@@ -209,6 +211,36 @@ function waitForMessage(
   });
 }
 
+/** Resolve the openclaw.json config path. */
+function resolveConfigPath(): string {
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  return path.join(home, ".openclaw", "openclaw.json");
+}
+
+/**
+ * Re-read the agents list from the on-disk config file.
+ * Falls back to the in-memory config if the file read fails.
+ */
+async function freshAgentsConfig(
+  fallbackCfg: OpenClawConfig,
+  logger?: PluginLogger,
+): Promise<{ agents: Array<{ id: string; workspace?: string }>; defaultWorkspace?: string }> {
+  try {
+    const raw = await fs.readFile(resolveConfigPath(), "utf8");
+    const diskCfg = JSON.parse(raw) as OpenClawConfig;
+    return {
+      agents: diskCfg.agents?.list ?? [],
+      defaultWorkspace: diskCfg.agents?.defaults?.workspace?.trim() || undefined,
+    };
+  } catch (err) {
+    logger?.warn?.(`sideclaw: failed to re-read config from disk, using in-memory snapshot: ${err}`);
+    return {
+      agents: fallbackCfg.agents?.list ?? [],
+      defaultWorkspace: fallbackCfg.agents?.defaults?.workspace?.trim() || undefined,
+    };
+  }
+}
+
 /** Context passed to every plugin RPC handler. */
 type PluginRpcContext = {
   cfg: OpenClawConfig;
@@ -227,8 +259,7 @@ function makeHandler<P>(
   ) => Promise<{ ok: true; payload: unknown } | { ok: false; error: string }>,
 ): PluginRpcHandler {
   return async (frame, ctx) => {
-    const agentsList = ctx.cfg.agents?.list ?? [];
-    const defaultWorkspace = ctx.cfg.agents?.defaults?.workspace?.trim() || undefined;
+    const { agents: agentsList, defaultWorkspace } = await freshAgentsConfig(ctx.cfg, ctx.logger);
     const result = await fn(agentsList, frame.params as P, ctx.logger, defaultWorkspace);
     return result.ok
       ? { type: "res", id: frame.id, ok: true, payload: result.payload }
