@@ -25,6 +25,7 @@ import { handleWorkspaceLs, handleWorkspaceRead, handleWorkspaceWrite } from "./
 import type { RpcRequest, RpcResponse, WorkspaceLsParams, WorkspaceReadParams, WorkspaceWriteParams } from "./types.js";
 import fs from "node:fs/promises";
 import path from "node:path";
+import WebSocket from "ws";
 
 /** Schemes permitted for the platform WebSocket URL. */
 const ALLOWED_WS_SCHEMES = new Set(["ws:", "wss:"]);
@@ -64,14 +65,10 @@ export function triggerReconnect(): boolean {
 }
 
 /** Extract a human-readable detail string from a WebSocket error event. */
-function formatWsError(ev: Event): string {
-  // Node 22 WebSocket fires an ErrorEvent-shaped object but ErrorEvent is not a
-  // global in Node, so use duck typing rather than instanceof.
+function formatWsError(ev: WebSocket.ErrorEvent): string {
   const parts: string[] = [];
-  const msg = (ev as { message?: unknown }).message;
-  if (typeof msg === "string" && msg) parts.push(msg);
-  const err = (ev as { error?: unknown }).error;
-  if (err) parts.push(String(err));
+  if (typeof ev.message === "string" && ev.message) parts.push(ev.message);
+  if (ev.error) parts.push(String(ev.error));
   return parts.length ? parts.join(" — ") : `type=${ev.type}`;
 }
 
@@ -134,9 +131,8 @@ export function checkPlaintextToken(url: URL, logger?: PluginLogger): void {
 }
 
 /** Format a WebSocket CloseEvent into a human-readable reason string. */
-function formatCloseEvent(ev: Event): string {
-  const ce = ev as CloseEvent;
-  return ce.reason ? `${ce.code}: ${ce.reason}` : `code ${ce.code}`;
+function formatCloseEvent(ev: WebSocket.CloseEvent): string {
+  return ev.reason ? `${ev.code}: ${ev.reason}` : `code ${ev.code}`;
 }
 
 /**
@@ -213,17 +209,17 @@ function waitForMessage(
       signal.removeEventListener("abort", onAbort);
     };
 
-    const onMessage = (ev: MessageEvent) => {
+    const onMessage = (ev: WebSocket.MessageEvent) => {
       cleanup();
       resolve(typeof ev.data === "string" ? ev.data : String(ev.data));
     };
-    const onClose = (ev: Event) => {
+    const onClose = (ev: WebSocket.CloseEvent) => {
       cleanup();
       reject(new Error(`WebSocket closed while waiting for message (${formatCloseEvent(ev)})`));
     };
-    const onError = (ev: Event) => {
+    const onError = (ev: WebSocket.ErrorEvent) => {
       cleanup();
-      reject(new Error(`WebSocket error: ${ev}`));
+      reject(new Error(`WebSocket error: ${formatWsError(ev)}`));
     };
     const onAbort = () => {
       cleanup();
@@ -341,7 +337,7 @@ function relayFrames(
       resolve();
     };
 
-    const aToB = (ev: MessageEvent) => {
+    const aToB = (ev: WebSocket.MessageEvent) => {
       const raw = typeof ev.data === "string" ? ev.data : String(ev.data);
 
       try {
@@ -373,7 +369,7 @@ function relayFrames(
       try { b.send(ev.data); } catch { done(); }
     };
 
-    const bToA = (ev: MessageEvent) => {
+    const bToA = (ev: WebSocket.MessageEvent) => {
       const raw = typeof ev.data === "string" ? ev.data : String(ev.data);
 
       // Intercept plugin-handled RPCs from the gateway (e.g. workspace.write
@@ -502,10 +498,6 @@ async function runSession(ctx: ChannelGatewayContext<PlatformAccount>): Promise<
  * reconnecting. The wait can be skipped early via `triggerReconnect`.
  */
 export async function startAccount(ctx: ChannelGatewayContext<PlatformAccount>): Promise<void> {
-  // const wsSrc = WebSocket.toString().slice(0, 120);
-  // ctx.log?.info(`platform: WebSocket impl=${wsSrc}`);
-  // ctx.log?.info(`platform: HTTP_PROXY=${process.env.HTTP_PROXY ?? "(unset)"} HTTPS_PROXY=${process.env.HTTPS_PROXY ?? "(unset)"}`);
-
   try {
     while (!ctx.abortSignal.aborted) {
       let lastError: string | null = null;
