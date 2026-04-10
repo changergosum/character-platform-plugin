@@ -416,13 +416,13 @@ function relayFrames(
 async function runSession(ctx: ChannelGatewayContext<PlatformAccount>): Promise<void> {
   const { platformUrl } = ctx.account;
   const gatewayToken = resolveGatewayToken(ctx.cfg);
-  const pairingToken = ctx.account.pairingToken;
-  if (!pairingToken) {
+  const platformKey = ctx.account.platformKey;
+  if (!platformKey) {
     throw new Error(
-      "platform: pairingToken is required — generate one from Settings > Gateway in the Platform web app",
+      "platform: platformKey is required — generate one from Settings > Gateway in the Platform web app",
     );
   }
-  const identityToken = pairingToken;
+  const identityToken = platformKey;
   const gatewayUrl = resolveGatewayUrl(ctx.cfg);
 
   // Validate URLs before connecting

@@ -13,7 +13,7 @@ export type PlatformAccount = {
   /** true when platformUrl is set */
   configured: boolean;
   platformUrl: string;
-  pairingToken?: string;
+  platformKey?: string;
 };
 
 export function resolveAccount(cfg: OpenClawConfig, accountId?: string): PlatformAccount {
@@ -28,7 +28,7 @@ export function resolveAccount(cfg: OpenClawConfig, accountId?: string): Platfor
     enabled: platform.enabled === true,
     configured: platformUrl.length > 0,
     platformUrl,
-    pairingToken: typeof platform.pairingToken === "string" ? platform.pairingToken || undefined : undefined,
+    platformKey: typeof platform.platformKey === "string" ? platform.platformKey || undefined : undefined,
   };
 }
 
@@ -43,12 +43,12 @@ export function inspectAccount(cfg: OpenClawConfig, _accountId?: string | null):
 } {
   const platform = cfg.channels?.platform ?? {};
   const platformUrl = typeof platform.platformUrl === "string" && platform.platformUrl.trim().length > 0;
-  const hasPairingToken = typeof platform.pairingToken === "string" && platform.pairingToken.length > 0;
+  const hasPlatformKey = typeof platform.platformKey === "string" && platform.platformKey.length > 0;
 
   return {
     enabled: platform.enabled === true,
     configured: platformUrl,
-    tokenStatus: hasPairingToken ? "available" : "missing",
+    tokenStatus: hasPlatformKey ? "available" : "missing",
   };
 }
 

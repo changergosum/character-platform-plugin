@@ -17,7 +17,7 @@
             "type": "string",
             "description": "WebSocket URL of the platform server, e.g. ws://platform-host:19999"
           },
-          "pairingToken": {
+          "platformKey": {
             "type": "string",
             "description": "Pairing token from platform onboarding UI"
           }
@@ -30,7 +30,7 @@
       "label": "platform URL",
       "placeholder": "ws://platform-host:19999"
     },
-    "pairingToken": {
+    "platformKey": {
       "label": "Pairing Token",
       "placeholder": "Token from platform onboarding",
       "sensitive": true

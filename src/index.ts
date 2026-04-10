@@ -75,7 +75,7 @@ export default function register(api: OpenClawPluginApi) {
       lines.push("**Config**");
       lines.push(`Enabled: ${account.enabled}`);
       lines.push(`Platform URL: ${account.platformUrl || "(not set)"}`);
-      lines.push(`Pairing token: ${account.pairingToken ? "set" : "missing"}`);
+      lines.push(`Pairing token: ${account.platformKey ? "set" : "missing"}`);
 
       return { text: lines.join("\n") };
     },
