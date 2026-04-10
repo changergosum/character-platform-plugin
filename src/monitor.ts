@@ -444,32 +444,7 @@ function relayFrames(
 
     const bToA = (ev: UndiciMessageEvent) => {
       const raw = typeof ev.data === "string" ? ev.data : String(ev.data);
-
-      // Intercept plugin-handled RPCs from the gateway (e.g. workspace.write
-      // triggered by the backend's install endpoint). Responses go back to the
-      // gateway (b), not to sideclaw.
-      try {
-        const frame = JSON.parse(raw) as RpcRequest;
-        if (frame.type === "req") {
-          const handler = PLUGIN_HANDLERS[frame.method];
-          if (handler) {
-            logger?.info(`sideclaw: intercepted gateway rpc id=${frame.id} method=${frame.method}`);
-            handler(frame, pluginCtx)
-              .then((resp) => {
-                try { b.send(JSON.stringify(resp)); } catch { done(); }
-              })
-              .catch((err) => {
-                const resp: RpcResponse = {
-                  type: "res", id: frame.id, ok: false,
-                  error: { message: String(err) },
-                };
-                try { b.send(JSON.stringify(resp)); } catch { done(); }
-              });
-            return; // intercepted — don't forward to sideclaw
-          }
-        }
-      } catch { /* not a parseable RPC — fall through */ }
-
+      
       // Check if this response belongs to a plugin-initiated gateway request.
       try {
         const frame = JSON.parse(raw) as RpcResponse;
