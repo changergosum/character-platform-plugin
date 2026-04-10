@@ -25,7 +25,7 @@ import { handleWorkspaceLs, handleWorkspaceRead, handleWorkspaceWrite } from "./
 import type { RpcRequest, RpcResponse, WorkspaceLsParams, WorkspaceReadParams, WorkspaceWriteParams } from "./types.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import WebSocket from "ws";
+import { WebSocket, type MessageEvent as UndiciMessageEvent, type CloseEvent as UndiciCloseEvent, type ErrorEvent as UndiciErrorEvent } from 'undici';
 
 /** Schemes permitted for the platform WebSocket URL. */
 const ALLOWED_WS_SCHEMES = new Set(["ws:", "wss:"]);
@@ -65,7 +65,7 @@ export function triggerReconnect(): boolean {
 }
 
 /** Extract a human-readable detail string from a WebSocket error event. */
-function formatWsError(ev: WebSocket.ErrorEvent): string {
+function formatWsError(ev: UndiciErrorEvent): string {
   const parts: string[] = [];
   if (typeof ev.message === "string" && ev.message) parts.push(ev.message);
   if (ev.error) parts.push(String(ev.error));
@@ -131,7 +131,7 @@ export function checkPlaintextToken(url: URL, logger?: PluginLogger): void {
 }
 
 /** Format a WebSocket CloseEvent into a human-readable reason string. */
-function formatCloseEvent(ev: WebSocket.CloseEvent): string {
+function formatCloseEvent(ev: UndiciCloseEvent): string {
   return ev.reason ? `${ev.code}: ${ev.reason}` : `code ${ev.code}`;
 }
 
@@ -209,15 +209,15 @@ function waitForMessage(
       signal.removeEventListener("abort", onAbort);
     };
 
-    const onMessage = (ev: WebSocket.MessageEvent) => {
+    const onMessage = (ev: UndiciMessageEvent) => {
       cleanup();
       resolve(typeof ev.data === "string" ? ev.data : String(ev.data));
     };
-    const onClose = (ev: WebSocket.CloseEvent) => {
+    const onClose = (ev: UndiciCloseEvent) => {
       cleanup();
       reject(new Error(`WebSocket closed while waiting for message (${formatCloseEvent(ev)})`));
     };
-    const onError = (ev: WebSocket.ErrorEvent) => {
+    const onError = (ev: UndiciErrorEvent) => {
       cleanup();
       reject(new Error(`WebSocket error: ${formatWsError(ev)}`));
     };
@@ -337,7 +337,7 @@ function relayFrames(
       resolve();
     };
 
-    const aToB = (ev: WebSocket.MessageEvent) => {
+    const aToB = (ev: UndiciMessageEvent) => {
       const raw = typeof ev.data === "string" ? ev.data : String(ev.data);
 
       try {
@@ -369,7 +369,7 @@ function relayFrames(
       try { b.send(ev.data); } catch { done(); }
     };
 
-    const bToA = (ev: WebSocket.MessageEvent) => {
+    const bToA = (ev: UndiciMessageEvent) => {
       const raw = typeof ev.data === "string" ? ev.data : String(ev.data);
 
       // Intercept plugin-handled RPCs from the gateway (e.g. workspace.write
