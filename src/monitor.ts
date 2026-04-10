@@ -18,10 +18,18 @@
  * to platform, we ensure the handshake completes before the timeout.
  */
 
+import { randomUUID } from "node:crypto";
 import type { ChannelGatewayContext, OpenClawConfig, PluginLogger } from "openclaw/plugin-sdk";
 import { resolveGatewayToken, resolveGatewayUrl } from "./config.js";
 import type { PlatformAccount } from "./config.js";
 import { handleWorkspaceLs, handleWorkspaceRead, handleWorkspaceWrite } from "./workspace.js";
+import {
+  handlePlatformChatSend,
+  handlePlatformChatHistory,
+  handlePlatformChatAbort,
+  handlePlatformChatReset,
+  handlePlatformSessionResolve,
+} from "./chat.js";
 import type { RpcRequest, RpcResponse, WorkspaceLsParams, WorkspaceReadParams, WorkspaceWriteParams } from "./types.js";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -263,10 +271,15 @@ async function freshAgentsConfig(
   }
 }
 
+/** Sends an RPC call to the gateway WS and resolves with the payload or throws on error. */
+type GatewayForwarder = (method: string, params: Record<string, unknown>) => Promise<unknown>;
+
 /** Context passed to every plugin RPC handler. */
 type PluginRpcContext = {
   cfg: OpenClawConfig;
   logger?: PluginLogger;
+  /** Forward an RPC call to the gateway and await its response. */
+  forwardToGateway: GatewayForwarder;
 };
 
 /** A handler for a plugin-intercepted RPC method. Returns a ready-to-send RpcResponse. */
@@ -292,11 +305,30 @@ function makeHandler<P>(
 /**
  * Plugin-intercepted RPC methods.
  * Add entries here to handle new methods locally without forwarding to the gateway.
+ *
+ * Workspace methods are handled entirely locally (no gateway call).
+ * Platform chat methods build session keys and forward to the gateway.
  */
 const PLUGIN_HANDLERS: Record<string, PluginRpcHandler> = {
+  // Workspace operations — handled locally
   "workspace.read": makeHandler<WorkspaceReadParams>(handleWorkspaceRead),
   "workspace.write": makeHandler<WorkspaceWriteParams>(handleWorkspaceWrite),
   "workspace.ls": makeHandler<WorkspaceLsParams>(handleWorkspaceLs),
+
+  // Chat interface — translates platform user context into openclaw session keys,
+  // then forwards to the gateway.  Mirrors the Telegram channel session pattern.
+  "platform.chat.send": (frame, ctx) =>
+    handlePlatformChatSend(frame, { forwardToGateway: ctx.forwardToGateway, logger: ctx.logger }),
+  "platform.chat.history": (frame, ctx) =>
+    handlePlatformChatHistory(frame, { forwardToGateway: ctx.forwardToGateway, logger: ctx.logger }),
+  "platform.chat.abort": (frame, ctx) =>
+    handlePlatformChatAbort(frame, { forwardToGateway: ctx.forwardToGateway, logger: ctx.logger }),
+  "platform.chat.reset": (frame, ctx) =>
+    handlePlatformChatReset(frame, { forwardToGateway: ctx.forwardToGateway, logger: ctx.logger }),
+
+  // Session key resolution — no gateway call, just returns the computed key.
+  "platform.session.resolve": (frame, ctx) =>
+    handlePlatformSessionResolve(frame, { forwardToGateway: ctx.forwardToGateway, logger: ctx.logger }),
 };
 
 /**
@@ -310,6 +342,9 @@ const PLUGIN_HANDLERS: Record<string, PluginRpcHandler> = {
  *              optionally `agents.list` for agent-specific overrides.
  * @param logger - Optional logger for request logging and handler operations.
  */
+/** Timeout for plugin-initiated gateway RPC requests. */
+const GATEWAY_REQUEST_TIMEOUT_MS = 30_000;
+
 function relayFrames(
   a: WebSocket,
   b: WebSocket,
@@ -317,9 +352,42 @@ function relayFrames(
   cfg: OpenClawConfig,
   logger?: PluginLogger,
 ): Promise<void> {
+  // Pending requests that the plugin (not the platform) sent to the gateway.
+  // Keyed by the plugin-generated request ID so bToA can intercept responses.
+  const pendingGatewayRequests = new Map<string, (res: RpcResponse) => void>();
+
+  const forwardToGateway: GatewayForwarder = (method, params) =>
+    new Promise((resolve, reject) => {
+      const id = randomUUID();
+      const timer = setTimeout(() => {
+        pendingGatewayRequests.delete(id);
+        reject(new Error(`gateway request timed out: ${method}`));
+      }, GATEWAY_REQUEST_TIMEOUT_MS);
+
+      pendingGatewayRequests.set(id, (res) => {
+        clearTimeout(timer);
+        pendingGatewayRequests.delete(id);
+        if (res.ok) {
+          resolve(res.payload);
+        } else {
+          reject(new Error(res.error?.message ?? `gateway error for ${method}`));
+        }
+      });
+
+      const reqFrame: RpcRequest = { type: "req", id, method, params };
+      try {
+        b.send(JSON.stringify(reqFrame));
+      } catch (err) {
+        clearTimeout(timer);
+        pendingGatewayRequests.delete(id);
+        reject(err);
+      }
+    });
+
   const pluginCtx: PluginRpcContext = {
     cfg,
     logger,
+    forwardToGateway,
   };
 
   return new Promise<void>((resolve) => {
@@ -327,6 +395,11 @@ function relayFrames(
     const done = () => {
       if (resolved) return;
       resolved = true;
+      // Reject all pending gateway requests so callers don't hang.
+      for (const cb of pendingGatewayRequests.values()) {
+        cb({ type: "res", id: "", ok: false, error: { message: "connection closed" } });
+      }
+      pendingGatewayRequests.clear();
       a.removeEventListener("message", aToB);
       b.removeEventListener("message", bToA);
       a.removeEventListener("close", onClose);
@@ -359,7 +432,7 @@ function relayFrames(
               });
             return; // intercepted — don't forward to gateway
           }
-        }  else if (frame.type === "error") {
+        } else if (frame.type === "error") {
           const frame = JSON.parse(raw) as { type?: unknown; message?: unknown };
           logger?.error(`platform: gateway error — ${frame.message ?? "(no message)"}`);
           return;
@@ -396,6 +469,18 @@ function relayFrames(
           }
         }
       } catch { /* not a parseable RPC — fall through */ }
+
+      // Check if this response belongs to a plugin-initiated gateway request.
+      try {
+        const frame = JSON.parse(raw) as RpcResponse;
+        if (frame.type === "res" && frame.id) {
+          const pending = pendingGatewayRequests.get(frame.id);
+          if (pending) {
+            pending(frame);
+            return; // consumed — don't forward to platform
+          }
+        }
+      } catch { /* not parseable — fall through */ }
 
       try { a.send(ev.data); } catch { done(); }
     };

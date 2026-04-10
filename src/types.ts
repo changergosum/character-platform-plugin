@@ -46,3 +46,47 @@ export type FileEntry = {
   name: string;
   content: string;
 };
+
+// ---------------------------------------------------------------------------
+// Platform chat RPC params
+// ---------------------------------------------------------------------------
+
+/** Parameters for platform.chat.send — send a message to an agent on behalf of a user. */
+export type PlatformChatSendParams = {
+  /** Platform user ID used to derive the session key. */
+  userId: string;
+  /** Agent ID to target. Defaults to "main" when omitted. */
+  agentId?: string | null;
+  /** The message text to send. */
+  message: string;
+  /** Optional extended thinking prompt. */
+  thinking?: string | null;
+  /** Client-supplied idempotency key / run ID. */
+  runId?: string | null;
+};
+
+/** Parameters for platform.chat.history — fetch conversation history for a user. */
+export type PlatformChatHistoryParams = {
+  userId: string;
+  agentId?: string | null;
+  limit?: number | null;
+};
+
+/** Parameters for platform.chat.abort — abort an in-flight agent run for a user. */
+export type PlatformChatAbortParams = {
+  userId: string;
+  agentId?: string | null;
+  runId?: string | null;
+};
+
+/** Parameters for platform.chat.reset — reset (clear) a user's conversation session. */
+export type PlatformChatResetParams = {
+  userId: string;
+  agentId?: string | null;
+};
+
+/** Parameters for platform.session.resolve — return the computed session key without sending anything. */
+export type PlatformSessionResolveParams = {
+  userId: string;
+  agentId?: string | null;
+};
