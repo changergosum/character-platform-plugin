@@ -1,55 +1,55 @@
 /**
- * SideClaw — OpenClaw channel plugin for real-time AI voice conversations.
+ * Platform — OpenClaw channel plugin for real-time AI voice conversations.
  *
- * Connects an OpenClaw agent to the SideClaw voice platform, enabling the agent
+ * Connects an OpenClaw agent to the Platform voice platform, enabling the agent
  * to participate in live voice calls with embodied characters. The gateway
- * initiates the connection to SideClaw and maintains a persistent session
+ * initiates the connection to Platform and maintains a persistent session
  * for RPC communication.
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { sideClawChannel } from "./channel.js";
+import { PlatformChannel } from "./channel.js";
 import { triggerReconnect, getConnectionStatus } from "./monitor.js";
 import { resolveAccount } from "./config.js";
 
 export default function register(api: OpenClawPluginApi) {
-  api.registerChannel({ plugin: sideClawChannel });
+  api.registerChannel({ plugin: PlatformChannel });
 
   api.registerCommand({
-    name: "sideclaw-pair",
-    description: "Show instructions for pairing OpenClaw with SideClaw",
+    name: "platform-pair",
+    description: "Show instructions for pairing OpenClaw with Platform",
     handler: () => ({
       text: [
-        "To pair OpenClaw with SideClaw:",
+        "To pair OpenClaw with platform:",
         "",
-        "1. Follow the setup instructions at https://sideclaw.md",
-        "2. Register an account on SideClaw and add OpenClaw as a connection",
+        "1. Follow the setup instructions at https://platform.md",
+        "2. Register an account on Platform and add OpenClaw as a connection",
         "3. Add OpenClaw and follow instructions to install pairing token in OpenClaw",
         "",
-        "Once configured, restart the gateway and use /sideclaw-status to verify the connection.",
+        "Once configured, restart the gateway and use /platform-status to verify the connection.",
       ].join("\n"),
     }),
   });
 
   api.registerCommand({
-    name: "sideclaw-reconnect",
-    description: "Skip the retry delay and reconnect to SideClaw immediately",
+    name: "platform-reconnect",
+    description: "Skip the retry delay and reconnect to Platform immediately",
     handler: () => {
       const triggered = triggerReconnect();
       return triggered
-        ? { text: "Sideclaw: reconnecting now." }
-        : { text: "Sideclaw: no pending retry — already connected or not running." };
+        ? { text: "platform: reconnecting now." }
+        : { text: "platform: no pending retry — already connected or not running." };
     },
   });
 
   api.registerCommand({
-    name: "sideclaw-status",
-    description: "Show SideClaw connection status and current configuration",
+    name: "platform-status",
+    description: "Show Platform connection status and current configuration",
     handler: (ctx) => {
       const status = getConnectionStatus();
       const account = resolveAccount(ctx.config);
 
-      const lines: string[] = ["**SideClaw Status**"];
+      const lines: string[] = ["**Platform Status**"];
 
       // Connection state
       switch (status.state) {
@@ -74,12 +74,12 @@ export default function register(api: OpenClawPluginApi) {
       lines.push("");
       lines.push("**Config**");
       lines.push(`Enabled: ${account.enabled}`);
-      lines.push(`SideClaw URL: ${account.sideClawUrl || "(not set)"}`);
+      lines.push(`Platform URL: ${account.platformUrl || "(not set)"}`);
       lines.push(`Pairing token: ${account.pairingToken ? "set" : "missing"}`);
 
       return { text: lines.join("\n") };
     },
   });
 
-  api.logger.info("sideclaw: channel registered");
+  api.logger.info("platform: channel registered");
 }

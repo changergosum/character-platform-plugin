@@ -31,7 +31,7 @@ Add the following to your `openclaw.json` under `channels.sideclaw`:
   "channels": {
     "sideclaw": {
       "enabled": true,
-      "sideClawUrl": "ws://sideclaw-host:19999",
+      "platformUrl": "ws://sideclaw-host:19999",
       "pairingToken": "sk_pair_YOUR_TOKEN_HERE"
     }
   }
@@ -42,7 +42,7 @@ Or use the CLI:
 
 ```bash
 openclaw config set channels.sideclaw.enabled true
-openclaw config set channels.sideclaw.sideClawUrl "ws://sideclaw-host:19999"
+openclaw config set channels.sideclaw.platformUrl "ws://sideclaw-host:19999"
 openclaw config set channels.sideclaw.pairingToken "sk_pair_YOUR_TOKEN_HERE"
 ```
 
@@ -51,7 +51,7 @@ openclaw config set channels.sideclaw.pairingToken "sk_pair_YOUR_TOKEN_HERE"
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `enabled` | boolean | Yes | Enable or disable the channel |
-| `sideClawUrl` | string | Yes | WebSocket URL of the SideClaw server (ws:// or wss://) |
+| `platformUrl` | string | Yes | WebSocket URL of the SideClaw server (ws:// or wss://) |
 | `pairingToken` | string | Yes | Pairing token generated from the SideClaw onboarding UI |
 
 ### Environment variables
@@ -65,7 +65,7 @@ openclaw config set channels.sideclaw.pairingToken "sk_pair_YOUR_TOKEN_HERE"
 | Command | Description |
 |---------|-------------|
 | `/sideclaw-pair` | Show step-by-step pairing instructions (register on SideClaw, add OpenClaw, get pairing token) |
-| `/sideclaw-status` | Show current connection state and configured values (`sideClawUrl`, `pairingToken` presence, `enabled`) |
+| `/sideclaw-status` | Show current connection state and configured values (`platformUrl`, `pairingToken` presence, `enabled`) |
 | `/sideclaw-reconnect` | Skip the pending retry delay and reconnect immediately (no-op if already connected) |
 
 ## How It Works
@@ -78,7 +78,7 @@ The relay intercepts `workspace.read` RPC requests from the SideClaw server. Ins
 
 ## Security
 
-- **URL validation**: Only `ws://` and `wss://` URLs are accepted for `sideClawUrl`. Any other scheme is rejected to prevent SSRF.
+- **URL validation**: Only `ws://` and `wss://` URLs are accepted for `platformUrl`. Any other scheme is rejected to prevent SSRF.
 - **Plaintext token warning**: If `pairingToken` is transmitted over an unencrypted `ws://` connection, the plugin logs a security warning. Use `wss://` in production.
 - **Secret priority**: `OPENCLAW_GATEWAY_TOKEN` in the environment always takes precedence over the value in `openclaw.json`. Prefer environment variables for secrets rather than storing them in config files.
 

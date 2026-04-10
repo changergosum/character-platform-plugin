@@ -1,5 +1,5 @@
 /**
- * ChannelPlugin definition for sideclaw.
+ * ChannelPlugin definition for platform.
  *
  * Per the OpenClaw SDK spec, only `id` and `setup` are required.
  * Additional adapters (security, pairing, threading, outbound) are
@@ -7,19 +7,19 @@
  */
 
 import type { ChannelGatewayContext, ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk";
-import { resolveAccount, inspectAccount, type SideClawAccount } from "./config.js";
+import { resolveAccount, inspectAccount, type PlatformAccount } from "./config.js";
 import { startAccount } from "./monitor.js";
 
-export const sideClawChannel: ChannelPlugin = {
-  id: "sideclaw",
+export const PlatformChannel: ChannelPlugin = {
+  id: "platform",
 
   meta: {
-    id: "sideclaw",
-    label: "SideClaw",
-    selectionLabel: "SideClaw",
-    docsPath: "/channels/sideclaw",
-    blurb: "Connect OpenClaw to SideClaw for real-time AI voice conversations with embodied agents.",
-    aliases: ["sideclaw"],
+    id: "platform",
+    label: "platform",
+    selectionLabel: "platform",
+    docsPath: "/channels/platform",
+    blurb: "Connect OpenClaw to character platform.",
+    aliases: ["platform"],
   },
 
   capabilities: {
@@ -28,12 +28,12 @@ export const sideClawChannel: ChannelPlugin = {
 
   config: {
     listAccountIds(cfg: OpenClawConfig): string[] {
-      const sideclaw = cfg?.channels?.sideclaw;
-      if (!sideclaw?.enabled) return [];
-      return ["sideclaw"];
+      const platform = cfg?.channels?.platform;
+      if (!platform?.enabled) return [];
+      return ["platform"];
     },
 
-    resolveAccount(cfg: OpenClawConfig, accountId?: string | null): SideClawAccount {
+    resolveAccount(cfg: OpenClawConfig, accountId?: string | null): PlatformAccount {
       return resolveAccount(cfg, accountId ?? undefined);
     },
 
@@ -43,7 +43,7 @@ export const sideClawChannel: ChannelPlugin = {
   },
 
   gateway: {
-    async startAccount(ctx: ChannelGatewayContext<SideClawAccount>): Promise<void> {
+    async startAccount(ctx: ChannelGatewayContext<PlatformAccount>): Promise<void> {
       await startAccount(ctx);
     },
   },

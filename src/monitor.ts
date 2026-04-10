@@ -1,5 +1,5 @@
 /**
- * startAccount() — the long-lived task for the sideclaw channel.
+ * startAccount() — the long-lived task for the platform channel.
  *
  * The gateway ChannelManager calls this and auto-restarts it with backoff
  * if it exits (WS close, abort, error).
@@ -7,26 +7,26 @@
  * Flow:
  *   1. Open loopback WS to the gateway's own local port
  *   2. Buffer the connect.challenge from the gateway
- *   3. Dial sideclaw WS server
+ *   3. Dial platform WS server
  *   4. Send pre-handshake frame (delivers gateway token)
- *   5. Forward the buffered challenge to sideclaw
+ *   5. Forward the buffered challenge to platform
  *   6. Manually relay the handshake (connect RPC → hello-ok)
  *   7. Switch to generic bidirectional frame relay
  *
  * The buffered handshake is critical: the gateway has a short timeout for
  * unauthenticated connections. By buffering the challenge before connecting
- * to sideclaw, we ensure the handshake completes before the timeout.
+ * to platform, we ensure the handshake completes before the timeout.
  */
 
 import type { ChannelGatewayContext, OpenClawConfig, PluginLogger } from "openclaw/plugin-sdk";
 import { resolveGatewayToken, resolveGatewayUrl } from "./config.js";
-import type { SideClawAccount } from "./config.js";
+import type { PlatformAccount } from "./config.js";
 import { handleWorkspaceLs, handleWorkspaceRead, handleWorkspaceWrite } from "./workspace.js";
 import type { RpcRequest, RpcResponse, WorkspaceLsParams, WorkspaceReadParams, WorkspaceWriteParams } from "./types.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-/** Schemes permitted for the sideclaw WebSocket URL. */
+/** Schemes permitted for the platform WebSocket URL. */
 const ALLOWED_WS_SCHEMES = new Set(["ws:", "wss:"]);
 
 /** Loopback addresses where plaintext ws:// is acceptable. */
@@ -107,12 +107,12 @@ export function validateWsUrl(raw: string, label: string): URL {
   try {
     url = new URL(raw);
   } catch {
-    throw new Error(`sideclaw: invalid ${label} URL: ${raw}`);
+    throw new Error(`platform: invalid ${label} URL: ${raw}`);
   }
 
   if (!ALLOWED_WS_SCHEMES.has(url.protocol)) {
     throw new Error(
-      `sideclaw: ${label} URL must use ws:// or wss:// (got ${url.protocol})`,
+      `platform: ${label} URL must use ws:// or wss:// (got ${url.protocol})`,
     );
   }
 
@@ -128,16 +128,24 @@ export function checkPlaintextToken(url: URL, logger?: PluginLogger): void {
   if (LOOPBACK_HOSTS.has(url.hostname)) return; // local dev — acceptable
 
   logger?.warn?.(
-    `sideclaw: sending token over plaintext ws:// to ${url.hostname} — ` +
+    `platform: sending token over plaintext ws:// to ${url.hostname} — ` +
     `use wss:// in production to protect credentials`,
   );
+}
+
+/** Format a WebSocket CloseEvent into a human-readable reason string. */
+function formatCloseEvent(ev: Event): string {
+  const ce = ev as CloseEvent;
+  return ce.reason ? `${ce.code}: ${ce.reason}` : `code ${ce.code}`;
 }
 
 /**
  * Connect to a WS server with an abort signal.
  * Returns a WebSocket in OPEN state or throws.
+ * If the server closes the connection before or immediately after open,
+ * rejects with the close code and reason from the server.
  */
-function connectWithAbort(url: string, signal: AbortSignal): Promise<WebSocket> {
+function connectWithAbort(url: string, signal: AbortSignal, timeoutMs = 10_000): Promise<WebSocket> {
   return new Promise<WebSocket>((resolve, reject) => {
     if (signal.aborted) {
       reject(new Error("aborted before connect"));
@@ -145,21 +153,39 @@ function connectWithAbort(url: string, signal: AbortSignal): Promise<WebSocket> 
     }
 
     const ws = new WebSocket(url);
+    let opened = false;
+
+    const settle = (fn: () => void) => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      fn();
+    };
+
+    const timer = setTimeout(() => {
+      ws.close();
+      settle(() => reject(new Error(`WebSocket connect timeout after ${timeoutMs}ms (${url})`)));
+    }, timeoutMs);
 
     const onAbort = () => {
       ws.close();
-      reject(new Error("aborted during connect"));
+      settle(() => reject(new Error("aborted during connect")));
     };
     signal.addEventListener("abort", onAbort, { once: true });
 
     ws.addEventListener("open", () => {
-      signal.removeEventListener("abort", onAbort);
-      resolve(ws);
+      opened = true;
+      settle(() => resolve(ws));
     }, { once: true });
 
     ws.addEventListener("error", (ev) => {
-      signal.removeEventListener("abort", onAbort);
-      reject(new Error(`WebSocket connect error: ${formatWsError(ev)}`));
+      settle(() => reject(new Error(`WebSocket connect error: ${formatWsError(ev)}`)));
+    }, { once: true });
+
+    // Capture server-sent close reasons (e.g. service restarting) that arrive
+    // before the open event. If open already fired, waitForMessage handles it.
+    ws.addEventListener("close", (ev) => {
+      if (opened) return;
+      settle(() => reject(new Error(`WebSocket closed during connect (${formatCloseEvent(ev)})`)));
     }, { once: true });
   });
 }
@@ -191,9 +217,9 @@ function waitForMessage(
       cleanup();
       resolve(typeof ev.data === "string" ? ev.data : String(ev.data));
     };
-    const onClose = () => {
+    const onClose = (ev: Event) => {
       cleanup();
-      reject(new Error("WebSocket closed while waiting for message"));
+      reject(new Error(`WebSocket closed while waiting for message (${formatCloseEvent(ev)})`));
     };
     const onError = (ev: Event) => {
       cleanup();
@@ -280,7 +306,7 @@ const PLUGIN_HANDLERS: Record<string, PluginRpcHandler> = {
 /**
  * Relay frames bidirectionally between two WebSockets.
  *
- * Messages from `a` (sideclaw/bot-runner) heading to `b` (gateway) are
+ * Messages from `a` (platform/bot-runner) heading to `b` (gateway) are
  * logged and checked against PLUGIN_HANDLERS. Matching methods are handled
  * locally; everything else is forwarded verbatim.
  *
@@ -321,7 +347,7 @@ function relayFrames(
       try {
         const frame = JSON.parse(raw) as RpcRequest;
         if (frame.type === "req") {
-          logger?.info(`sideclaw: rpc request id=${frame.id} method=${frame.method}`);
+          logger?.info(`platform: rpc request id=${frame.id} method=${frame.method}`);
           const handler = PLUGIN_HANDLERS[frame.method];
           if (handler) {
             handler(frame, pluginCtx)
@@ -337,7 +363,12 @@ function relayFrames(
               });
             return; // intercepted — don't forward to gateway
           }
+        }  else if (frame.type === "error") {
+          const frame = JSON.parse(raw) as { type?: unknown; message?: unknown };
+          logger?.error(`platform: gateway error — ${frame.message ?? "(no message)"}`);
+          return;
         }
+
       } catch { /* not a parseable RPC — fall through */ }
       try { b.send(ev.data); } catch { done(); }
     };
@@ -384,45 +415,52 @@ function relayFrames(
 }
 
 /**
- * One connection attempt: buffer challenge, dial sideclaw, relay handshake, then relay frames.
+ * One connection attempt: buffer challenge, dial platform, relay handshake, then relay frames.
  */
-async function runSession(ctx: ChannelGatewayContext<SideClawAccount>): Promise<void> {
-  const { sideClawUrl } = ctx.account;
+async function runSession(ctx: ChannelGatewayContext<PlatformAccount>): Promise<void> {
+  const { platformUrl } = ctx.account;
   const gatewayToken = resolveGatewayToken(ctx.cfg);
   const pairingToken = ctx.account.pairingToken;
   if (!pairingToken) {
     throw new Error(
-      "sideclaw: pairingToken is required — generate one from Settings > Gateway in the SideClaw web app",
+      "platform: pairingToken is required — generate one from Settings > Gateway in the Platform web app",
     );
   }
   const identityToken = pairingToken;
   const gatewayUrl = resolveGatewayUrl(ctx.cfg);
 
   // Validate URLs before connecting
-  const sideClawParsed = validateWsUrl(sideClawUrl, "sideClawUrl");
+  const platformParsed = validateWsUrl(platformUrl, "platformUrl");
   validateWsUrl(gatewayUrl, "gatewayUrl");
 
   // Warn if sending token over plaintext to a remote host
-  checkPlaintextToken(sideClawParsed, ctx.log);
+  checkPlaintextToken(platformParsed, ctx.log);
 
   connectionStatus = { state: "connecting" };
 
   // 1. Connect to gateway FIRST — it sends connect.challenge immediately
+  ctx.log?.info("platform: [1] connecting to gateway");
   const gatewayWs = await connectWithAbort(gatewayUrl, ctx.abortSignal);
+  ctx.log?.info("platform: [1] gateway connected");
 
   // 2. Buffer the connect.challenge
+  ctx.log?.info("platform: [2] waiting for connect.challenge from gateway");
   const challengeRaw = await waitForMessage(gatewayWs, ctx.abortSignal);
+  ctx.log?.info("platform: [2] challenge buffered");
 
-  // 3. Dial sideclaw
+  // 3. Dial platform
   // TODO: to prevent some malicious skill from changing config to connect
   // to their platform and taking control of our user's OpenClaw we should validate
-  // the TLS certificate of the sideClawUrl server is owned by us.
-  const sideClawWs = await connectWithAbort(sideClawUrl, ctx.abortSignal);
+  // the TLS certificate of the platformUrl server is owned by us.
+  ctx.log?.info(`platform: [3] dialing platform at ${platformUrl}`);
+  const platformWs = await connectWithAbort(platformUrl, ctx.abortSignal);
+  ctx.log?.info("platform: [3] platform connected");
   ctx.setStatus({ accountId: ctx.accountId, connected: false, lastError: null });
 
   // 4. Send pre-handshake — delivers identity token (pairing or gateway) for routing,
-  //    plus the gateway token so sideclaw can sign the handshake correctly.
-  sideClawWs.send(
+  //    plus the gateway token so platform can sign the handshake correctly.
+  ctx.log?.info("platform: [4] sending pre-handshake");
+  platformWs.send(
     JSON.stringify({
       type: "pre-handshake",
       version: 1,
@@ -431,25 +469,31 @@ async function runSession(ctx: ChannelGatewayContext<SideClawAccount>): Promise<
     }),
   );
 
-  // 5. Forward the buffered challenge to sideclaw
-  sideClawWs.send(challengeRaw);
+  // 5. Forward the buffered challenge to platform
+  ctx.log?.info("platform: [5] forwarding challenge to platform");
+  platformWs.send(challengeRaw);
 
   // 6. Relay the handshake manually:
-  //    sideclaw sends connect RPC → forward to gateway
-  const connectRaw = await waitForMessage(sideClawWs, ctx.abortSignal);
+  //    platform sends connect RPC → forward to gateway
+  ctx.log?.info("platform: [6a] waiting for connect RPC from platform");
+  const connectRaw = await waitForMessage(platformWs, ctx.abortSignal);
+  ctx.log?.info("platform: [6a] forwarding connect RPC to gateway");
   gatewayWs.send(connectRaw);
 
-  //    gateway sends hello-ok → forward to sideclaw
+  //    gateway sends hello-ok → forward to platform
+  ctx.log?.info("platform: [6b] waiting for hello-ok from gateway");
   const helloRaw = await waitForMessage(gatewayWs, ctx.abortSignal);
-  sideClawWs.send(helloRaw);
+  ctx.log?.info("platform: [6b] forwarding hello-ok to platform");
+  platformWs.send(helloRaw);
 
   connectionStatus = { state: "connected" };
   ctx.setStatus({ accountId: ctx.accountId, connected: true });
-  ctx.log?.info("sideclaw: handshake complete, ready");
+  ctx.log?.info("platform: handshake complete, ready");
 
   // 7. Switch to generic bidirectional frame relay
   //    All GatewaySession RPC calls flow through from here.
-  await relayFrames(sideClawWs, gatewayWs, ctx.abortSignal, ctx.cfg, ctx.log);
+  ctx.log?.info("platform: [7] entering relay loop");
+  await relayFrames(platformWs, gatewayWs, ctx.abortSignal, ctx.cfg, ctx.log);
 }
 
 /**
@@ -457,21 +501,29 @@ async function runSession(ctx: ChannelGatewayContext<SideClawAccount>): Promise<
  * On failure, logs the full error and waits RETRY_DELAY_MS before
  * reconnecting. The wait can be skipped early via `triggerReconnect`.
  */
-export async function startAccount(ctx: ChannelGatewayContext<SideClawAccount>): Promise<void> {
+export async function startAccount(ctx: ChannelGatewayContext<PlatformAccount>): Promise<void> {
+  // const wsSrc = WebSocket.toString().slice(0, 120);
+  // ctx.log?.info(`platform: WebSocket impl=${wsSrc}`);
+  // ctx.log?.info(`platform: HTTP_PROXY=${process.env.HTTP_PROXY ?? "(unset)"} HTTPS_PROXY=${process.env.HTTPS_PROXY ?? "(unset)"}`);
+
   try {
     while (!ctx.abortSignal.aborted) {
+      let lastError: string | null = null;
       try {
         await runSession(ctx);
+        ctx.log?.info("platform: session ended, reconnecting in " + RETRY_DELAY_MS / 1000 + "s");
       } catch (err) {
         if (ctx.abortSignal.aborted) return;
         const msg = err instanceof Error ? `${err.message}${err.cause ? ` (cause: ${err.cause})` : ""}` : String(err);
-        ctx.log?.error(`sideclaw: connection failed — ${msg}${err instanceof Error && err.stack ? `\n${err.stack}` : ""}`);
+        ctx.log?.error(`platform: connection failed — ${msg}${err instanceof Error && err.stack ? `\n${err.stack}` : ""}`);
         ctx.setStatus({ accountId: ctx.accountId, connected: false, lastError: msg });
-        const retryingAt = Date.now() + RETRY_DELAY_MS;
-        connectionStatus = { state: "retrying", retryingAt, lastError: msg };
-        ctx.log?.info(`sideclaw: retrying in ${RETRY_DELAY_MS / 1000}s (or use /sideclaw-reconnect to retry now)`);
-        await waitForRetry(RETRY_DELAY_MS, ctx.abortSignal);
+        lastError = msg;
+        ctx.log?.info(`platform: retrying in ${RETRY_DELAY_MS / 1000}s (or use /platform-reconnect to retry now)`);
       }
+      if (ctx.abortSignal.aborted) return;
+      const retryingAt = Date.now() + RETRY_DELAY_MS;
+      connectionStatus = { state: "retrying", retryingAt, lastError: lastError ?? "disconnected" };
+      await waitForRetry(RETRY_DELAY_MS, ctx.abortSignal);
     }
   } finally {
     connectionStatus = { state: "disconnected" };

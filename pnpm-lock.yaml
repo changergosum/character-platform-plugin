@@ -14,6 +14,9 @@ importers:
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
+      undici-types:
+        specifier: ^8.0.2
+        version: 8.0.2
       vitest:
         specifier: ^4.1.1
         version: 4.1.2(@types/node@25.5.0)(vite@8.0.3(@emnapi/core@1.9.1)(@emnapi/runtime@1.9.1)(@types/node@25.5.0)(jiti@2.6.1)(yaml@2.8.3))
@@ -2380,6 +2383,9 @@ packages:
 
   undici-types@7.18.2:
     resolution: {integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==}
+
+  undici-types@8.0.2:
+    resolution: {integrity: sha512-5AfRgQ8gcBaQW8pKd/zYRGGspwSCjFaMEq2oLKKt8T2bgnML0MH+SzIIn0B0xJ9qx7UADB8weRiNxdADJgLZ7A==}
 
   undici@7.24.7:
     resolution: {integrity: sha512-H/nlJ/h0ggGC+uRL3ovD+G0i4bqhvsDOpbDv7At5eFLlj2b41L8QliGbnl2H7SnDiYhENphh1tQFJZf+MyfLsQ==}
@@ -5351,6 +5357,8 @@ snapshots:
   undici-types@7.16.0: {}
 
   undici-types@7.18.2: {}
+
+  undici-types@8.0.2: {}
 
   undici@7.24.7: {}
 

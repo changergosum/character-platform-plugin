@@ -16,7 +16,7 @@ This is `@egoai/sideclaw`, an OpenClaw channel plugin that connects an OpenClaw 
 
 ### Plugin registration flow
 
-`src/index.ts` exports a `register(api)` function called by the OpenClaw gateway. It registers `sideClawChannel` (defined in `src/channel.ts`) which implements the OpenClaw ChannelPlugin interface with config resolution and a `gateway.startAccount` entry point.
+`src/index.ts` exports a `register(api)` function called by the OpenClaw gateway. It registers `platformChannel` (defined in `src/channel.ts`) which implements the OpenClaw ChannelPlugin interface with config resolution and a `gateway.startAccount` entry point.
 
 ### Core pattern: buffered reverse WebSocket relay
 
