@@ -31,8 +31,8 @@
       "placeholder": "ws://platform-host:19999"
     },
     "platformKey": {
-      "label": "Pairing Token",
-      "placeholder": "Token from platform onboarding",
+      "label": "Platform Key",
+      "placeholder": "Key from platform onboarding",
       "sensitive": true
     }
   }
